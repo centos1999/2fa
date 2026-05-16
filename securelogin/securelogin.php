@@ -199,7 +199,7 @@ function securelogin_activate()
              }
          } catch (Exception $e) {}
 
-         if (!Capsule::schema()->hasTable('mod_securelogin_codes')) {
+        if (!Capsule::schema()->hasTable('mod_securelogin_codes')) {
             Capsule::schema()->create('mod_securelogin_codes', function ($table) {
                 $table->integer('userid');
                 $table->string('code', 12)->nullable();
@@ -214,6 +214,27 @@ function securelogin_activate()
                 $table->index('userid');
             });
         }
+        if (!Capsule::schema()->hasTable('mod_securelogin_totp_disable_codes')) {
+            Capsule::schema()->create('mod_securelogin_totp_disable_codes', function ($table) {
+                $table->integer('userid');
+                $table->string('code', 12)->nullable();
+                $table->timestamp('expires_at')->nullable();
+                $table->integer('attempts_left')->default(0);
+                $table->integer('resend_count')->default(0);
+                $table->timestamp('last_sent_at')->nullable();
+                $table->date('last_sent_local_date')->nullable();
+                $table->timestamp('locked_until')->nullable();
+                $table->timestamp('created_at')->default(Capsule::raw('CURRENT_TIMESTAMP'));
+                $table->timestamp('updated_at')->default(Capsule::raw('CURRENT_TIMESTAMP'));
+                $table->index('userid');
+            });
+        }
+        try {
+            $idx = Capsule::select("SHOW INDEX FROM mod_securelogin_totp_disable_codes WHERE Key_name='uq_totp_disable_codes_userid'");
+            if (!$idx) {
+                Capsule::statement("ALTER TABLE mod_securelogin_totp_disable_codes ADD UNIQUE KEY uq_totp_disable_codes_userid (userid)");
+            }
+        } catch (Exception $e) {}
         // 迁移：为 codes 表添加 last_sent_local_date 列（用于每日计数原子更新）
         try {
             $col = Capsule::select("SHOW COLUMNS FROM mod_securelogin_codes LIKE 'last_sent_local_date'");
@@ -729,7 +750,7 @@ function securelogin_clientarea($vars)
                     $scError = ($uiLang === 'zh') ? '请先发送邮箱验证码。' : 'Please send an email code first.';
                 } else {
                     $code = trim((string)($_POST['code'] ?? ''));
-                    $verify = securelogin_verifyCodeValue($userId, $code, $config);
+                    $verify = securelogin_verifyCodeValueByScene($userId, $code, $config, 'totp_disable');
                     if (!empty($verify['ok'])) {
                         securelogin_disableUserTotp($userId);
                         unset($_SESSION['securelogin_disable_totp_pending']);
@@ -813,7 +834,7 @@ function securelogin_clientarea($vars)
         $securityLevel = 'low';
         if ($totpEnabled) {
             try {
-                list($disableAvailableIn, $disableRemaining) = securelogin_canResend($userId, $config);
+                list($disableAvailableIn, $disableRemaining) = securelogin_canResend($userId, $config, 'totp_disable');
             } catch (Exception $e) { $disableAvailableIn = 0; $disableRemaining = 0; }
         }
         try {

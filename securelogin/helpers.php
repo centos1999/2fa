@@ -426,6 +426,27 @@ function securelogin_getOrCreateCodeRow($userId)
     return $row;
 }
 
+function securelogin_getOrCreateTotpDisableCodeRow($userId)
+{
+    $row = Capsule::table('mod_securelogin_totp_disable_codes')->where('userid', (int)$userId)->first();
+    if (!$row) {
+        Capsule::table('mod_securelogin_totp_disable_codes')->insert([
+            'userid' => (int)$userId,
+            'code' => null,
+            'expires_at' => null,
+            'attempts_left' => 0,
+            'resend_count' => 0,
+            'last_sent_at' => null,
+            'last_sent_local_date' => null,
+            'locked_until' => null,
+            'created_at' => securelogin_now()->format('Y-m-d H:i:s'),
+            'updated_at' => securelogin_now()->format('Y-m-d H:i:s'),
+        ]);
+        $row = Capsule::table('mod_securelogin_totp_disable_codes')->where('userid', (int)$userId)->first();
+    }
+    return $row;
+}
+
 function securelogin_isLocked($userId)
 {
     $row = Capsule::table('mod_securelogin_codes')->where('userid', (int)$userId)->first();
@@ -700,7 +721,9 @@ function securelogin_canResend($userId, $config, $scene = 'login')
     }
     if ($interval <= 0) $interval = 60;
     if ($maxPerDay <= 0) $maxPerDay = ($scene === 'totp_disable') ? 3 : 5;
-    $row = securelogin_getOrCreateCodeRow($userId);
+    $row = ($scene === 'totp_disable')
+        ? securelogin_getOrCreateTotpDisableCodeRow($userId)
+        : securelogin_getOrCreateCodeRow($userId);
 
     $availableIn = 0;
     if ($row->last_sent_at) {
@@ -736,7 +759,9 @@ function securelogin_resendCode($userId, $config, $templateName = 'Secure Login 
     if ($availableIn > 0) {
         return [false, $availableIn, $remaining];
     }
-    $row = securelogin_getOrCreateCodeRow($userId);
+    $row = ($scene === 'totp_disable')
+        ? securelogin_getOrCreateTotpDisableCodeRow($userId)
+        : securelogin_getOrCreateCodeRow($userId);
     $code = securelogin_randomDigits(6);
     $expiryMinutes = (int)($config['code_expiry_minutes'] ?? 5);
     $expiresAt = securelogin_now()->modify("+{$expiryMinutes} minutes")->format('Y-m-d H:i:s');
@@ -752,8 +777,9 @@ function securelogin_resendCode($userId, $config, $templateName = 'Secure Login 
     // 原子更新每日计数：基于 last_sent_local_date（系统时区自然日）
     $todayLocal = securelogin_getLocalTodayDate();
     $conn = Capsule::connection();
+    $targetTable = ($scene === 'totp_disable') ? 'mod_securelogin_totp_disable_codes' : 'mod_securelogin_codes';
     $conn->affectingStatement(
-        "UPDATE mod_securelogin_codes SET code = ?, expires_at = ?, last_sent_at = ?, resend_count = IF(last_sent_local_date = ?, resend_count + 1, 1), last_sent_local_date = ?, updated_at = ? WHERE userid = ?",
+        "UPDATE {$targetTable} SET code = ?, expires_at = ?, last_sent_at = ?, resend_count = IF(last_sent_local_date = ?, resend_count + 1, 1), last_sent_local_date = ?, updated_at = ? WHERE userid = ?",
         [
             $code,
             $expiresAt,
@@ -809,6 +835,26 @@ function securelogin_verifyCodeValue($userId, $inputCode, $config)
         return ['ok' => false, 'reason' => 'locked'];
     }
     return ['ok' => false, 'reason' => 'invalid', 'attempts_left' => $attemptsLeft];
+}
+
+function securelogin_verifyCodeValueByScene($userId, $inputCode, $config, $scene = 'login')
+{
+    if ($scene !== 'totp_disable') {
+        return securelogin_verifyCodeValue($userId, $inputCode, $config);
+    }
+    $row = securelogin_getOrCreateTotpDisableCodeRow($userId);
+    if (!$row->code || !$row->expires_at) return ['ok' => false, 'reason' => 'no_code'];
+    $now = securelogin_now();
+    $exp = new DateTime($row->expires_at, new DateTimeZone('UTC'));
+    if ($exp < $now) return ['ok' => false, 'reason' => 'expired'];
+    $input = trim((string)$inputCode);
+    if ($input !== '' && hash_equals((string)$row->code, $input)) {
+        Capsule::table('mod_securelogin_totp_disable_codes')->where('userid', (int)$userId)->update([
+            'code' => null, 'expires_at' => null, 'attempts_left' => 0, 'updated_at' => $now->format('Y-m-d H:i:s'),
+        ]);
+        return ['ok' => true];
+    }
+    return ['ok' => false, 'reason' => 'invalid'];
 }
 
 function securelogin_consumeAttemptAndMaybeLock($userId, $config, $logEvent = 'verify_failed')

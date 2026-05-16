@@ -46,6 +46,7 @@
 - 关闭TOTP验证码重发间隔(秒)（totp_disable_resend_interval_seconds）：默认 60
 - 关闭TOTP验证码每日上限（totp_disable_max_resend）：默认 3（独立于 max_resend）
 - 关闭TOTP验证码邮件模板（totp_disable_email_template）：默认 Secure Login Disable TOTP Code
+- 关闭TOTP验证码使用独立计数与独立验证码存储，不与登录验证码共用发送次数/冷却
 - 最大错误次数（max_attempts）：默认 5
 - 错误锁定时间(小时)（lock_minutes）：默认 1（注意：该项单位已改为“小时”，内部执行时换算为分钟）
 - 记住设备天数（remember_device_days）：默认 30 天
