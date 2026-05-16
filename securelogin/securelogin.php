@@ -739,9 +739,15 @@ function securelogin_clientarea($vars)
                                     ? ('发送过于频繁，请 ' . (int)$availableIn . ' 秒后重试。')
                                     : ('Too many requests. Please retry in ' . (int)$availableIn . ' seconds.');
                             } else {
-                                $scError = ($uiLang === 'zh')
-                                    ? '今日验证码发送次数已达上限。'
-                                    : 'Daily verification code limit reached.';
+                                if ($lastErr === 'maxed') {
+                                    $scError = ($uiLang === 'zh')
+                                        ? '今日验证码发送次数已达上限。'
+                                        : 'Daily verification code limit reached.';
+                                } else {
+                                    $scError = ($uiLang === 'zh')
+                                        ? '发送失败，请刷新页面后重试。'
+                                        : 'Send failed. Please refresh and retry.';
+                                }
                             }
                         }
                     }
