@@ -183,7 +183,9 @@
       // 前端不做硬禁用，避免因缓存/会话异常造成“误判上限”无法点击。
       // 真实上限由后端严格校验并返回消息。
       sendBtn.disabled = false;
-      sendBtn.textContent = l ? '发送邮箱验证码（今日可能已达上限）' : 'Send Email Code (daily limit may be reached)';
+      sendBtn.textContent = l
+        ? '发送邮箱验证码（状态待确认，点击后由服务器校验）'
+        : 'Send Email Code (status pending, server will verify after click)';
       return;
     }
     if (countdown > 0) {
@@ -194,7 +196,9 @@
       return;
     }
     sendBtn.disabled = false;
-    sendBtn.textContent = l ? ('发送邮箱验证码（剩余' + remaining + '次）') : ('Send Email Code (' + remaining + ' left)');
+      sendBtn.textContent = l
+        ? ('发送邮箱验证码（今日剩余 ' + remaining + ' 次）')
+        : ('Send Email Code (' + remaining + ' remaining today)');
   }
   renderSendBtn();
   var backupCb = document.querySelector('input[name="backup_email_enabled"]');
