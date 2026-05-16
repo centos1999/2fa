@@ -82,6 +82,25 @@ function securelogin_config()
                 'Size' => '5',
                 'Default' => '5',
             ],
+            'totp_disable_resend_interval_seconds' => [
+                'FriendlyName' => '关闭TOTP验证码重发间隔(秒)',
+                'Type' => 'text',
+                'Size' => '5',
+                'Default' => '60',
+            ],
+            'totp_disable_max_resend' => [
+                'FriendlyName' => '关闭TOTP验证码每日上限',
+                'Type' => 'text',
+                'Size' => '5',
+                'Default' => '3',
+            ],
+            'totp_disable_email_template' => [
+                'FriendlyName' => '关闭TOTP验证码邮件模板',
+                'Type' => 'text',
+                'Size' => '40',
+                'Default' => 'Secure Login Disable TOTP Code',
+                'Description' => '用于“安全中心关闭 TOTP”的邮箱验证码模板名称',
+            ],
             'max_attempts' => [
                 'FriendlyName' => '最大错误次数',
                 'Type' => 'text',
@@ -350,6 +369,21 @@ function securelogin_activate()
             ]);
         }
 
+        // 关闭 TOTP 验证码模板（用于安全中心关闭 TOTP）
+        $templateName4 = 'Secure Login Disable TOTP Code';
+        $existing4 = Capsule::table('tblemailtemplates')->where('name', $templateName4)->first();
+        if (!$existing4) {
+            Capsule::table('tblemailtemplates')->insert([
+                'type' => 'general',
+                'name' => $templateName4,
+                'subject' => '【关闭TOTP验证】您的验证码',
+                'message' => "尊敬的客户，\n\n您正在关闭账户的动态口令（TOTP）保护。\n验证码为：{\$code}\n有效期：5 分钟。\n\n如非本人操作，请立即联系客服。",
+                'plaintext' => 1,
+                'custom' => 1,
+                'disabled' => 0,
+            ]);
+        }
+
         return ['status' => 'success', 'description' => '安全登录插件已激活，邮件模板已创建'];
     } catch (Exception $e) {
         return ['status' => 'error', 'description' => '激活失败: ' . $e->getMessage()];
@@ -570,12 +604,24 @@ function securelogin_clientarea($vars)
         'code_expiry_minutes' => (int)securelogin_getAddonSetting('code_expiry_minutes', 5),
         'resend_interval_seconds' => (int)securelogin_getAddonSetting('resend_interval_seconds', 60),
         'max_resend' => (int)securelogin_getAddonSetting('max_resend', 5),
+        'totp_disable_resend_interval_seconds' => (int)securelogin_getAddonSetting('totp_disable_resend_interval_seconds', 60),
+        'totp_disable_max_resend' => (int)securelogin_getAddonSetting('totp_disable_max_resend', 3),
+        'totp_disable_email_template' => trim((string)securelogin_getAddonSetting('totp_disable_email_template', 'Secure Login Disable TOTP Code')),
         'max_attempts' => (int)securelogin_getAddonSetting('max_attempts', 5),
         'lock_minutes' => (int)securelogin_getAddonSetting('lock_minutes', 30),
         'remember_device_days' => (int)securelogin_getAddonSetting('remember_device_days', 30),
         'enable_builtin_totp' => securelogin_boolval(securelogin_getAddonSetting('enable_builtin_totp', 'on'), true),
         'allow_email_backup_when_totp' => securelogin_boolval(securelogin_getAddonSetting('allow_email_backup_when_totp', 'on'), true),
     ];
+    if ($config['totp_disable_resend_interval_seconds'] <= 0) {
+        $config['totp_disable_resend_interval_seconds'] = 60;
+    }
+    if ($config['totp_disable_max_resend'] <= 0) {
+        $config['totp_disable_max_resend'] = 3;
+    }
+    if ($config['totp_disable_email_template'] === '') {
+        $config['totp_disable_email_template'] = 'Secure Login Disable TOTP Code';
+    }
     $actionParam = (string)($_GET['action'] ?? '');
 
     $csrfToken = securelogin_getCsrfToken('client');
@@ -655,8 +701,8 @@ function securelogin_clientarea($vars)
                             ? ('账户已锁定，请稍后重试（剩余 ' . (int)$mins . ' 分 ' . (int)$secs . ' 秒）。')
                             : ('Account is locked. Please retry later (remaining ' . (int)$mins . 'm ' . (int)$secs . 's).');
                     } else {
-                        $tpl = 'Secure Login Verification Code';
-                        list($okSend, $availableIn, $remaining) = securelogin_resendCode($userId, $config, $tpl);
+                        $tpl = $config['totp_disable_email_template'];
+                        list($okSend, $availableIn, $remaining) = securelogin_resendCode($userId, $config, $tpl, 'totp_disable');
                         if ($okSend) {
                             $_SESSION['securelogin_disable_totp_pending'] = 1;
                             $scMessage = ($uiLang === 'zh') ? '验证码已发送到您的邮箱，请输入验证码确认关闭 TOTP。' : 'A code has been sent to your email. Enter it to confirm disabling TOTP.';

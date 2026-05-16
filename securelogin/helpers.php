@@ -688,10 +688,18 @@ function securelogin_issueNewCode($userId, $config, $templateName = 'Secure Logi
     return [$code, $expiresAt];
 }
 
-function securelogin_canResend($userId, $config)
+function securelogin_canResend($userId, $config, $scene = 'login')
 {
-    $interval = (int)($config['resend_interval_seconds'] ?? 60);
-    $maxPerDay = (int)($config['max_resend'] ?? 5);
+    $scene = (string)$scene;
+    if ($scene === 'totp_disable') {
+        $interval = (int)($config['totp_disable_resend_interval_seconds'] ?? 60);
+        $maxPerDay = (int)($config['totp_disable_max_resend'] ?? 3);
+    } else {
+        $interval = (int)($config['resend_interval_seconds'] ?? 60);
+        $maxPerDay = (int)($config['max_resend'] ?? 5);
+    }
+    if ($interval <= 0) $interval = 60;
+    if ($maxPerDay <= 0) $maxPerDay = ($scene === 'totp_disable') ? 3 : 5;
     $row = securelogin_getOrCreateCodeRow($userId);
 
     $availableIn = 0;
@@ -712,7 +720,7 @@ function securelogin_canResend($userId, $config)
     return [$availableIn, $remaining];
 }
 
-function securelogin_resendCode($userId, $config, $templateName = 'Secure Login Verification Code')
+function securelogin_resendCode($userId, $config, $templateName = 'Secure Login Verification Code', $scene = 'login')
 {
     // 若处于锁定状态，直接拒绝重发
     if (securelogin_isLocked($userId)) {
@@ -720,7 +728,7 @@ function securelogin_resendCode($userId, $config, $templateName = 'Secure Login 
         return [false, 0, 0];
     }
 
-    list($availableIn, $remaining) = securelogin_canResend($userId, $config);
+    list($availableIn, $remaining) = securelogin_canResend($userId, $config, $scene);
     // 日上限优先于冷却：达上限时清零倒计时
     if ($remaining <= 0) {
         return [false, 0, 0];
@@ -758,7 +766,7 @@ function securelogin_resendCode($userId, $config, $templateName = 'Secure Login 
     );
     securelogin_recordLog($userId, 'code_resent', 'Code resent');
     // 重新计算剩余次数，确保返回最新数值
-    list($_ai, $remainingAfter) = securelogin_canResend($userId, $config);
+    list($_ai, $remainingAfter) = securelogin_canResend($userId, $config, $scene);
     return [true, 0, (int)$remainingAfter];
 }
 
