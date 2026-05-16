@@ -399,7 +399,7 @@ function securelogin_activate()
                 'type' => 'general',
                 'name' => $templateName4,
                 'subject' => '【安全通知】您的TOTP已被关闭',
-                'message' => "尊敬的客户，\n\n检测到您的账户已关闭 TOTP 动态口令验证。\n时间(UTC)：{\$event_time_utc}\nIP：{\$ip}\n\n若非本人操作，请立即联系支持并修改账户密码。\n\n--\n安全团队",
+                'message' => "尊敬的客户，\n\n检测到您的账户已关闭 TOTP 动态口令验证。\n时间(本地)：{\$event_time_local}\n时间(UTC)：{\$event_time_utc}\nIP：{\$ip}\n\n若非本人操作，请立即联系支持并修改账户密码。\n\n--\n安全团队",
                 'plaintext' => 1,
                 'custom' => 1,
                 'disabled' => 0,
