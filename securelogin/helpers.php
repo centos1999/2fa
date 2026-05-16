@@ -129,6 +129,32 @@ function securelogin_getOrCreateTotpDisableGuardRow($userId, $config)
     return $row;
 }
 
+function securelogin_refreshTotpDisableGuardState($userId, $config)
+{
+    $uid = (int)$userId;
+    list($maxAttempts, $_lockHours) = securelogin_getTotpDisableGuardConfig($config);
+    $row = securelogin_getOrCreateTotpDisableGuardRow($uid, $config);
+    if ($row && !empty($row->locked_until)) {
+        $now = securelogin_now();
+        $lockedUntil = new DateTime((string)$row->locked_until, new DateTimeZone('UTC'));
+        if ($lockedUntil <= $now) {
+            Capsule::table('mod_securelogin_totp_disable_guard')->where('userid', $uid)->update([
+                'attempts_left' => $maxAttempts,
+                'locked_until' => null,
+                'updated_at' => securelogin_now()->format('Y-m-d H:i:s'),
+            ]);
+            $row = Capsule::table('mod_securelogin_totp_disable_guard')->where('userid', $uid)->first();
+        }
+    } elseif ($row && (int)($row->attempts_left ?? 0) <= 0) {
+        Capsule::table('mod_securelogin_totp_disable_guard')->where('userid', $uid)->update([
+            'attempts_left' => $maxAttempts,
+            'updated_at' => securelogin_now()->format('Y-m-d H:i:s'),
+        ]);
+        $row = Capsule::table('mod_securelogin_totp_disable_guard')->where('userid', $uid)->first();
+    }
+    return $row;
+}
+
 function securelogin_getTotpDisableLockRemainingSeconds($userId)
 {
     $row = Capsule::table('mod_securelogin_totp_disable_guard')->where('userid', (int)$userId)->first();

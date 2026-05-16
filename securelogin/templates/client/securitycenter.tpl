@@ -188,6 +188,11 @@
   var lh = document.getElementById('sc-disable-lock-h');
   var lm = document.getElementById('sc-disable-lock-m');
   var ls = document.getElementById('sc-disable-lock-s');
+  var lockInfo = document.getElementById('sc-disable-lock-info');
+  var attemptsInfo = document.getElementById('sc-disable-attempts-info');
+  var maxAttempts = parseInt('{$disable_max_attempts|default:5}', 10) || 5;
+  var pwInput = document.querySelector('input[name="confirm_password"]');
+  var disableBtn = document.getElementById('sc-i18n-disable-btn');
   function tickLock(){
     if (lockSec <= 0) return;
     function step(){
@@ -196,7 +201,19 @@
       if (lh) lh.textContent = h;
       if (lm) lm.textContent = m;
       if (ls) ls.textContent = (s<10?'0':'') + s;
-      if (lockSec > 0){ lockSec -= 1; setTimeout(step,1000); }
+      if (lockSec > 0){
+        lockSec -= 1;
+        setTimeout(step,1000);
+      } else {
+        if (lockInfo) lockInfo.style.display = 'none';
+        if (attemptsInfo) {
+          attemptsInfo.style.display = '';
+          var da = document.getElementById('sc-i18n-disable-attempts');
+          if (da) da.textContent = (i18n[lang]||i18n.en).disableAttempts(maxAttempts, maxAttempts);
+        }
+        if (pwInput) pwInput.disabled = false;
+        if (disableBtn) disableBtn.disabled = false;
+      }
     }
     step();
   }

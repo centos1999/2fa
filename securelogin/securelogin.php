@@ -641,7 +641,7 @@ function securelogin_clientarea($vars)
         $disableLockSeconds = 0;
         if ($totpEnabled) {
             try {
-                $guard = securelogin_getOrCreateTotpDisableGuardRow($userId, $config);
+                $guard = securelogin_refreshTotpDisableGuardState($userId, $config);
                 $disableAttemptsLeft = max(0, (int)($guard->attempts_left ?? $disableAttemptsLeft));
                 $disableLockSeconds = securelogin_getTotpDisableLockRemainingSeconds($userId);
             } catch (Exception $e) {}
@@ -673,6 +673,10 @@ function securelogin_clientarea($vars)
                 if (!$totpEnabled) {
                     $scError = ($uiLang === 'zh') ? '当前未启用 TOTP。' : 'TOTP is not enabled.';
                 } else {
+                    try {
+                        $guard = securelogin_refreshTotpDisableGuardState($userId, $config);
+                        $disableAttemptsLeft = max(0, (int)($guard->attempts_left ?? $disableAttemptsLeft));
+                    } catch (Exception $e) {}
                     $disableLockSeconds = securelogin_getTotpDisableLockRemainingSeconds($userId);
                     if ($disableLockSeconds > 0) {
                         $h = floor($disableLockSeconds / 3600);
