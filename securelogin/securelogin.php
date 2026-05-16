@@ -200,8 +200,9 @@ function securelogin_activate()
                 $table->timestamp('expires_at')->nullable();
                 $table->integer('attempts_left')->default(0);
                 $table->integer('resend_count')->default(0);
-                $table->timestamp('last_sent_at')->nullable();
-                $table->date('last_sent_local_date')->nullable();
+                 $table->timestamp('last_sent_at')->nullable();
+                 $table->date('last_sent_local_date')->nullable();
+                $table->timestamp('last_attempt_at')->nullable();
                 $table->timestamp('locked_until')->nullable();
                 $table->timestamp('created_at')->default(Capsule::raw('CURRENT_TIMESTAMP'));
                 $table->timestamp('updated_at')->default(Capsule::raw('CURRENT_TIMESTAMP'));
@@ -213,6 +214,12 @@ function securelogin_activate()
             $col = Capsule::select("SHOW COLUMNS FROM mod_securelogin_codes LIKE 'last_sent_local_date'");
             if (!$col) {
                 Capsule::statement("ALTER TABLE mod_securelogin_codes ADD COLUMN last_sent_local_date DATE NULL AFTER last_sent_at");
+            }
+        } catch (Exception $e) {}
+        try {
+            $col = Capsule::select("SHOW COLUMNS FROM mod_securelogin_codes LIKE 'last_attempt_at'");
+            if (!$col) {
+                Capsule::statement("ALTER TABLE mod_securelogin_codes ADD COLUMN last_attempt_at TIMESTAMP NULL AFTER last_sent_local_date");
             }
         } catch (Exception $e) {}
         // 索引优化：codes 表唯一索引（若失败，说明存在重复数据，忽略）
@@ -296,6 +303,7 @@ function securelogin_activate()
             Capsule::schema()->create('mod_securelogin_totp_disable_guard', function ($table) {
                 $table->integer('userid');
                 $table->integer('attempts_left')->default(0);
+                $table->timestamp('last_attempt_at')->nullable();
                 $table->timestamp('locked_until')->nullable();
                 $table->timestamp('created_at')->default(Capsule::raw('CURRENT_TIMESTAMP'));
                 $table->timestamp('updated_at')->default(Capsule::raw('CURRENT_TIMESTAMP'));
@@ -306,6 +314,12 @@ function securelogin_activate()
             $idx = Capsule::select("SHOW INDEX FROM mod_securelogin_totp_disable_guard WHERE Key_name='uq_totp_disable_guard_userid'");
             if (!$idx) {
                 Capsule::statement("ALTER TABLE mod_securelogin_totp_disable_guard ADD UNIQUE KEY uq_totp_disable_guard_userid (userid)");
+            }
+        } catch (Exception $e) {}
+        try {
+            $col = Capsule::select("SHOW COLUMNS FROM mod_securelogin_totp_disable_guard LIKE 'last_attempt_at'");
+            if (!$col) {
+                Capsule::statement("ALTER TABLE mod_securelogin_totp_disable_guard ADD COLUMN last_attempt_at TIMESTAMP NULL AFTER attempts_left");
             }
         } catch (Exception $e) {}
         try {
