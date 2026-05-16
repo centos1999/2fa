@@ -729,7 +729,12 @@ function securelogin_clientarea($vars)
                             $scMessage = ($uiLang === 'zh') ? '验证码已发送到您的邮箱，请输入验证码确认关闭 TOTP。' : 'A code has been sent to your email. Enter it to confirm disabling TOTP.';
                             securelogin_recordLog($userId, 'totp_disable_code_sent', 'Disable-TOTP confirmation code sent');
                         } else {
-                            if ($availableIn > 0) {
+                            $lastErr = (string)($_SESSION['securelogin_send_last_error'] ?? '');
+                            if ($lastErr === 'mail_failed') {
+                                $scError = ($uiLang === 'zh')
+                                    ? '邮件发送失败，请稍后重试或联系管理员检查发信配置。'
+                                    : 'Failed to send email. Please retry later or contact support.';
+                            } elseif ($availableIn > 0) {
                                 $scError = ($uiLang === 'zh')
                                     ? ('发送过于频繁，请 ' . (int)$availableIn . ' 秒后重试。')
                                     : ('Too many requests. Please retry in ' . (int)$availableIn . ' seconds.');

@@ -428,6 +428,28 @@ function securelogin_getOrCreateCodeRow($userId)
 
 function securelogin_getOrCreateTotpDisableCodeRow($userId)
 {
+    try {
+        if (!Capsule::schema()->hasTable('mod_securelogin_totp_disable_codes')) {
+            Capsule::schema()->create('mod_securelogin_totp_disable_codes', function ($table) {
+                $table->integer('userid');
+                $table->string('code', 12)->nullable();
+                $table->timestamp('expires_at')->nullable();
+                $table->integer('attempts_left')->default(0);
+                $table->integer('resend_count')->default(0);
+                $table->timestamp('last_sent_at')->nullable();
+                $table->date('last_sent_local_date')->nullable();
+                $table->timestamp('locked_until')->nullable();
+                $table->timestamp('created_at')->default(Capsule::raw('CURRENT_TIMESTAMP'));
+                $table->timestamp('updated_at')->default(Capsule::raw('CURRENT_TIMESTAMP'));
+                $table->index('userid');
+            });
+        }
+        $idx = Capsule::select("SHOW INDEX FROM mod_securelogin_totp_disable_codes WHERE Key_name='uq_totp_disable_codes_userid'");
+        if (!$idx) {
+            Capsule::statement("ALTER TABLE mod_securelogin_totp_disable_codes ADD UNIQUE KEY uq_totp_disable_codes_userid (userid)");
+        }
+    } catch (Exception $e) {}
+
     $row = Capsule::table('mod_securelogin_totp_disable_codes')->where('userid', (int)$userId)->first();
     if (!$row) {
         Capsule::table('mod_securelogin_totp_disable_codes')->insert([
@@ -754,9 +776,11 @@ function securelogin_resendCode($userId, $config, $templateName = 'Secure Login 
     list($availableIn, $remaining) = securelogin_canResend($userId, $config, $scene);
     // 日上限优先于冷却：达上限时清零倒计时
     if ($remaining <= 0) {
+        $_SESSION['securelogin_send_last_error'] = 'maxed';
         return [false, 0, 0];
     }
     if ($availableIn > 0) {
+        $_SESSION['securelogin_send_last_error'] = 'throttle';
         return [false, $availableIn, $remaining];
     }
     $row = ($scene === 'totp_disable')
@@ -771,6 +795,7 @@ function securelogin_resendCode($userId, $config, $templateName = 'Secure Login 
     $ok = securelogin_sendCodeEmail($userId, $code, $templateName);
     if (!$ok) {
         securelogin_recordLog($userId, 'email_send_failed', 'Resend failed for template ' . $templateName);
+        $_SESSION['securelogin_send_last_error'] = 'mail_failed';
         return [false, 0, (int)$remaining];
     }
 
@@ -793,6 +818,7 @@ function securelogin_resendCode($userId, $config, $templateName = 'Secure Login 
     securelogin_recordLog($userId, 'code_resent', 'Code resent');
     // 重新计算剩余次数，确保返回最新数值
     list($_ai, $remainingAfter) = securelogin_canResend($userId, $config, $scene);
+    $_SESSION['securelogin_send_last_error'] = '';
     return [true, 0, (int)$remainingAfter];
 }
 
