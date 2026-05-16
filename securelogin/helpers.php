@@ -609,6 +609,25 @@ function securelogin_sendEmailChangeCode($userId, $newEmail, $code)
     }
 }
 
+function securelogin_sendTotpDisabledNoticeEmail($userId, $ip = '')
+{
+    try {
+        if (!function_exists('sendMessage')) return false;
+        $whenUtc = securelogin_now()->format('Y-m-d H:i:s') . ' UTC';
+        $merge = [
+            'notice_type' => 'totp_disabled',
+            'event_time_utc' => $whenUtc,
+            'ip' => (string)$ip,
+        ];
+        sendMessage('Secure Login TOTP Disabled Notice', (int)$userId, $merge);
+        securelogin_recordLog((int)$userId, 'totp_disabled_notice_sent', 'TOTP disabled notice email sent');
+        return true;
+    } catch (Exception $e) {
+        securelogin_recordLog((int)$userId, 'totp_disabled_notice_failed', 'Failed sending TOTP disabled notice: ' . $e->getMessage());
+        return false;
+    }
+}
+
 function securelogin_issueEmailChangeCode($userId, $newEmail, $config)
 {
     $expiryMinutes = (int)($config['code_expiry_minutes'] ?? 5);

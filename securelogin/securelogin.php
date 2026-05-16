@@ -89,10 +89,23 @@ function securelogin_config()
                 'Default' => '5',
             ],
             'lock_minutes' => [
-                'FriendlyName' => '错误锁定时间(小时)',
+                'FriendlyName' => '错误锁定时间(小时)（配置键: lock_minutes）',
                 'Type' => 'text',
                 'Size' => '5',
                 'Default' => '1',
+            ],
+            'notify_on_totp_disabled' => [
+                'FriendlyName' => '关闭TOTP发送安全通知邮件',
+                'Type' => 'yesno',
+                'Description' => '默认开启。用户在安全中心关闭 TOTP 后发送安全通知邮件（含时间/IP）',
+                'Default' => 'on',
+            ],
+            'securitycenter_guard_refresh_seconds' => [
+                'FriendlyName' => '安全中心状态刷新间隔(秒)',
+                'Type' => 'text',
+                'Size' => '5',
+                'Default' => '15',
+                'Description' => '锁定倒计时结束后前端等待N秒自动轻量刷新，以同步 guard 状态。',
             ],
             'remember_device_days' => [
                 'FriendlyName' => '记住设备天数',
@@ -365,6 +378,19 @@ function securelogin_activate()
                 'disabled' => 0,
             ]);
         }
+        $templateName4 = 'Secure Login TOTP Disabled Notice';
+        $existing4 = Capsule::table('tblemailtemplates')->where('name', $templateName4)->first();
+        if (!$existing4) {
+            Capsule::table('tblemailtemplates')->insert([
+                'type' => 'general',
+                'name' => $templateName4,
+                'subject' => '【安全通知】您的TOTP已被关闭',
+                'message' => "尊敬的客户，\n\n检测到您的账户已关闭 TOTP 动态口令验证。\n时间(UTC)：{\$event_time_utc}\nIP：{\$ip}\n\n若非本人操作，请立即联系支持并修改账户密码。\n\n--\n安全团队",
+                'plaintext' => 1,
+                'custom' => 1,
+                'disabled' => 0,
+            ]);
+        }
 
         return ['status' => 'success', 'description' => '安全登录插件已激活，邮件模板已创建'];
     } catch (Exception $e) {
@@ -587,10 +613,12 @@ function securelogin_clientarea($vars)
         'resend_interval_seconds' => (int)securelogin_getAddonSetting('resend_interval_seconds', 60),
         'max_resend' => (int)securelogin_getAddonSetting('max_resend', 5),
         'max_attempts' => (int)securelogin_getAddonSetting('max_attempts', 5),
-        'lock_minutes' => (int)securelogin_getAddonSetting('lock_minutes', 30),
+        'lock_minutes' => (int)securelogin_getAddonSetting('lock_minutes', 1),
         'remember_device_days' => (int)securelogin_getAddonSetting('remember_device_days', 30),
         'enable_builtin_totp' => securelogin_boolval(securelogin_getAddonSetting('enable_builtin_totp', 'on'), true),
         'allow_email_backup_when_totp' => securelogin_boolval(securelogin_getAddonSetting('allow_email_backup_when_totp', 'on'), true),
+        'notify_on_totp_disabled' => securelogin_boolval(securelogin_getAddonSetting('notify_on_totp_disabled', 'on'), true),
+        'securitycenter_guard_refresh_seconds' => max(3, (int)securelogin_getAddonSetting('securitycenter_guard_refresh_seconds', 15)),
     ];
     $actionParam = (string)($_GET['action'] ?? '');
 
@@ -707,6 +735,9 @@ function securelogin_clientarea($vars)
                         $totpSecret = ''; $totpEnabled = false; $totpBackupEmailEnabled = true;
                         $scMessage = ($uiLang === 'zh') ? 'TOTP 已关闭。' : 'TOTP disabled.';
                         securelogin_recordLog($userId, 'totp_disabled', 'User disabled built-in TOTP in security center via password confirmation');
+                        if (!empty($config['notify_on_totp_disabled'])) {
+                            securelogin_sendTotpDisabledNoticeEmail($userId, securelogin_getClientIp());
+                        }
                         } else {
                             $attemptResult = securelogin_consumeTotpDisablePasswordAttempt($userId, $config);
                             $disableAttemptsLeft = (int)($attemptResult['attempts_left'] ?? 0);
@@ -884,6 +915,7 @@ function securelogin_clientarea($vars)
                 'disable_attempts_left' => (int)$disableAttemptsLeft,
                 'disable_lock_seconds' => (int)$disableLockSeconds,
                 'disable_max_attempts' => max(1, (int)$config['max_attempts']),
+                'securitycenter_guard_refresh_seconds' => (int)$config['securitycenter_guard_refresh_seconds'],
             ],
         ];
     }
