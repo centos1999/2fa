@@ -279,6 +279,22 @@ function securelogin_activate()
                 $table->index('userid');
             });
         }
+        if (!Capsule::schema()->hasTable('mod_securelogin_totp_disable_guard')) {
+            Capsule::schema()->create('mod_securelogin_totp_disable_guard', function ($table) {
+                $table->integer('userid');
+                $table->integer('attempts_left')->default(0);
+                $table->timestamp('locked_until')->nullable();
+                $table->timestamp('created_at')->default(Capsule::raw('CURRENT_TIMESTAMP'));
+                $table->timestamp('updated_at')->default(Capsule::raw('CURRENT_TIMESTAMP'));
+                $table->index('userid');
+            });
+        }
+        try {
+            $idx = Capsule::select("SHOW INDEX FROM mod_securelogin_totp_disable_guard WHERE Key_name='uq_totp_disable_guard_userid'");
+            if (!$idx) {
+                Capsule::statement("ALTER TABLE mod_securelogin_totp_disable_guard ADD UNIQUE KEY uq_totp_disable_guard_userid (userid)");
+            }
+        } catch (Exception $e) {}
         try {
             $col = Capsule::select("SHOW COLUMNS FROM mod_securelogin_totp LIKE 'backup_email_enabled'");
             if (!$col) {
@@ -621,6 +637,15 @@ function securelogin_clientarea($vars)
         }
         $scMessage = '';
         $scError = '';
+        $disableAttemptsLeft = max(1, (int)$config['max_attempts']);
+        $disableLockSeconds = 0;
+        if ($totpEnabled) {
+            try {
+                $guard = securelogin_getOrCreateTotpDisableGuardRow($userId, $config);
+                $disableAttemptsLeft = max(0, (int)($guard->attempts_left ?? $disableAttemptsLeft));
+                $disableLockSeconds = securelogin_getTotpDisableLockRemainingSeconds($userId);
+            } catch (Exception $e) {}
+        }
         if ($postAction === 'sc_enable_totp') {
             if (!securelogin_validateCsrf('client', (string)($_POST['csrf_token'] ?? ''))) {
                 $scError = ($uiLang === 'zh') ? 'CSRF 校验失败，请刷新后重试。' : 'CSRF validation failed. Please refresh and try again.';
@@ -648,6 +673,15 @@ function securelogin_clientarea($vars)
                 if (!$totpEnabled) {
                     $scError = ($uiLang === 'zh') ? '当前未启用 TOTP。' : 'TOTP is not enabled.';
                 } else {
+                    $disableLockSeconds = securelogin_getTotpDisableLockRemainingSeconds($userId);
+                    if ($disableLockSeconds > 0) {
+                        $h = floor($disableLockSeconds / 3600);
+                        $m = floor(($disableLockSeconds % 3600) / 60);
+                        $s = (int)($disableLockSeconds % 60);
+                        $scError = ($uiLang === 'zh')
+                            ? ('关闭 TOTP 密码确认已被锁定，请稍后重试（剩余 ' . (int)$h . ' 小时 ' . (int)$m . ' 分 ' . (int)$s . ' 秒）。')
+                            : ('TOTP disable password confirmation is temporarily locked. Retry later (remaining ' . (int)$h . 'h ' . (int)$m . 'm ' . (int)$s . 's).');
+                    } else {
                     $confirmPassword = trim((string)($_POST['confirm_password'] ?? ''));
                     if ($confirmPassword === '') {
                         $scError = ($uiLang === 'zh') ? '请输入账户密码以确认关闭 TOTP。' : 'Please enter your account password to confirm disabling TOTP.';
@@ -665,13 +699,29 @@ function securelogin_clientarea($vars)
                         }
                         if ($passwordOk) {
                         securelogin_disableUserTotp($userId);
+                        securelogin_resetTotpDisableGuard($userId, $config);
                         $totpSecret = ''; $totpEnabled = false; $totpBackupEmailEnabled = true;
                         $scMessage = ($uiLang === 'zh') ? 'TOTP 已关闭。' : 'TOTP disabled.';
                         securelogin_recordLog($userId, 'totp_disabled', 'User disabled built-in TOTP in security center via password confirmation');
                         } else {
-                            $scError = ($uiLang === 'zh') ? '账户密码错误，无法关闭 TOTP。' : 'Incorrect account password. Unable to disable TOTP.';
+                            $attemptResult = securelogin_consumeTotpDisablePasswordAttempt($userId, $config);
+                            $disableAttemptsLeft = (int)($attemptResult['attempts_left'] ?? 0);
+                            $disableLockSeconds = (int)($attemptResult['lock_seconds'] ?? 0);
+                            if (!empty($attemptResult['locked'])) {
+                                $h = floor($disableLockSeconds / 3600);
+                                $m = floor(($disableLockSeconds % 3600) / 60);
+                                $s = (int)($disableLockSeconds % 60);
+                                $scError = ($uiLang === 'zh')
+                                    ? ('账户密码错误次数过多，已禁止关闭 TOTP（剩余 ' . (int)$h . ' 小时 ' . (int)$m . ' 分 ' . (int)$s . ' 秒）。')
+                                    : ('Too many incorrect password attempts. Disabling TOTP is locked (remaining ' . (int)$h . 'h ' . (int)$m . 'm ' . (int)$s . 's).');
+                            } else {
+                                $scError = ($uiLang === 'zh')
+                                    ? ('账户密码错误，无法关闭 TOTP。剩余尝试次数：' . (int)$disableAttemptsLeft . '。')
+                                    : ('Incorrect account password. Unable to disable TOTP. Attempts left: ' . (int)$disableAttemptsLeft . '.');
+                            }
                             securelogin_recordLog($userId, 'totp_disable_password_invalid', 'Failed to disable TOTP due to incorrect password');
                         }
+                    }
                     }
                 }
             }
@@ -827,6 +877,9 @@ function securelogin_clientarea($vars)
                 'recent_failed_at' => (string)$recentFailedAt,
                 'device_list' => $deviceList,
                 'preferred_method' => (string)$preferredMethod,
+                'disable_attempts_left' => (int)$disableAttemptsLeft,
+                'disable_lock_seconds' => (int)$disableLockSeconds,
+                'disable_max_attempts' => max(1, (int)$config['max_attempts']),
             ],
         ];
     }
