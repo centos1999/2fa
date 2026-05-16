@@ -832,7 +832,7 @@ function securelogin_clientarea($vars)
         $provisioning = '';
         $pending = '';
         $disableAvailableIn = 0;
-        $disableRemaining = 0;
+        $disableRemaining = max(1, (int)($config['totp_disable_max_resend'] ?? 3));
         $rememberDeviceCount = 0;
         $recentFailedAt = '';
         $securityScore = 0;
@@ -840,7 +840,11 @@ function securelogin_clientarea($vars)
         if ($totpEnabled) {
             try {
                 list($disableAvailableIn, $disableRemaining) = securelogin_canResend($userId, $config, 'totp_disable');
-            } catch (Exception $e) { $disableAvailableIn = 0; $disableRemaining = 0; }
+            } catch (Exception $e) {
+                $disableAvailableIn = 0;
+                $disableRemaining = max(1, (int)($config['totp_disable_max_resend'] ?? 3));
+                securelogin_recordLog($userId, 'totp_disable_canresend_error', 'canResend failed in security center: ' . $e->getMessage());
+            }
         }
         try {
             $rememberDeviceCount = (int)Capsule::table('mod_securelogin_devices')->where('userid', $userId)->count();
