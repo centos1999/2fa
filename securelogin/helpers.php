@@ -656,13 +656,13 @@ function securelogin_sendTotpDisabledNoticeEmail($userId, $ip = '')
 {
     try {
         if (!function_exists('sendMessage')) return false;
-        $whenUtc = securelogin_now()->format('Y-m-d H:i:s') . ' UTC';
+        $whenUtc = securelogin_now()->format('Y-m-d H:i:s');
         $tz = securelogin_getSystemTimezone();
         $whenLocal = new DateTime('now', $tz);
         $merge = [
             'notice_type' => 'totp_disabled',
             'event_time_utc' => $whenUtc,
-            'event_time_local' => $whenLocal->format('Y-m-d H:i:s') . ' ' . $tz->getName(),
+            'event_time_local' => $whenLocal->format('Y-m-d H:i:s'),
             'ip' => (string)$ip,
         ];
         sendMessage('Secure Login TOTP Disabled Notice', (int)$userId, $merge);
