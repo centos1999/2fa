@@ -89,10 +89,23 @@ function securelogin_config()
                 'Default' => '5',
             ],
             'lock_minutes' => [
-                'FriendlyName' => '错误锁定时间(小时)',
+                'FriendlyName' => '错误锁定时间(小时)（配置键: lock_minutes）',
                 'Type' => 'text',
                 'Size' => '5',
                 'Default' => '1',
+            ],
+            'notify_on_totp_disabled' => [
+                'FriendlyName' => '关闭TOTP发送安全通知邮件',
+                'Type' => 'yesno',
+                'Description' => '默认开启。用户在安全中心关闭 TOTP 后发送安全通知邮件（含时间/IP）',
+                'Default' => 'on',
+            ],
+            'securitycenter_guard_refresh_seconds' => [
+                'FriendlyName' => '安全中心状态刷新间隔(秒)',
+                'Type' => 'text',
+                'Size' => '5',
+                'Default' => '15',
+                'Description' => '锁定倒计时结束后前端等待N秒自动轻量刷新，以同步 guard 状态。',
             ],
             'remember_device_days' => [
                 'FriendlyName' => '记住设备天数',
@@ -187,8 +200,9 @@ function securelogin_activate()
                 $table->timestamp('expires_at')->nullable();
                 $table->integer('attempts_left')->default(0);
                 $table->integer('resend_count')->default(0);
-                $table->timestamp('last_sent_at')->nullable();
-                $table->date('last_sent_local_date')->nullable();
+                 $table->timestamp('last_sent_at')->nullable();
+                 $table->date('last_sent_local_date')->nullable();
+                $table->timestamp('last_attempt_at')->nullable();
                 $table->timestamp('locked_until')->nullable();
                 $table->timestamp('created_at')->default(Capsule::raw('CURRENT_TIMESTAMP'));
                 $table->timestamp('updated_at')->default(Capsule::raw('CURRENT_TIMESTAMP'));
@@ -200,6 +214,12 @@ function securelogin_activate()
             $col = Capsule::select("SHOW COLUMNS FROM mod_securelogin_codes LIKE 'last_sent_local_date'");
             if (!$col) {
                 Capsule::statement("ALTER TABLE mod_securelogin_codes ADD COLUMN last_sent_local_date DATE NULL AFTER last_sent_at");
+            }
+        } catch (Exception $e) {}
+        try {
+            $col = Capsule::select("SHOW COLUMNS FROM mod_securelogin_codes LIKE 'last_attempt_at'");
+            if (!$col) {
+                Capsule::statement("ALTER TABLE mod_securelogin_codes ADD COLUMN last_attempt_at TIMESTAMP NULL AFTER last_sent_local_date");
             }
         } catch (Exception $e) {}
         // 索引优化：codes 表唯一索引（若失败，说明存在重复数据，忽略）
@@ -279,6 +299,29 @@ function securelogin_activate()
                 $table->index('userid');
             });
         }
+        if (!Capsule::schema()->hasTable('mod_securelogin_totp_disable_guard')) {
+            Capsule::schema()->create('mod_securelogin_totp_disable_guard', function ($table) {
+                $table->integer('userid');
+                $table->integer('attempts_left')->default(0);
+                $table->timestamp('last_attempt_at')->nullable();
+                $table->timestamp('locked_until')->nullable();
+                $table->timestamp('created_at')->default(Capsule::raw('CURRENT_TIMESTAMP'));
+                $table->timestamp('updated_at')->default(Capsule::raw('CURRENT_TIMESTAMP'));
+                $table->index('userid');
+            });
+        }
+        try {
+            $idx = Capsule::select("SHOW INDEX FROM mod_securelogin_totp_disable_guard WHERE Key_name='uq_totp_disable_guard_userid'");
+            if (!$idx) {
+                Capsule::statement("ALTER TABLE mod_securelogin_totp_disable_guard ADD UNIQUE KEY uq_totp_disable_guard_userid (userid)");
+            }
+        } catch (Exception $e) {}
+        try {
+            $col = Capsule::select("SHOW COLUMNS FROM mod_securelogin_totp_disable_guard LIKE 'last_attempt_at'");
+            if (!$col) {
+                Capsule::statement("ALTER TABLE mod_securelogin_totp_disable_guard ADD COLUMN last_attempt_at TIMESTAMP NULL AFTER attempts_left");
+            }
+        } catch (Exception $e) {}
         try {
             $col = Capsule::select("SHOW COLUMNS FROM mod_securelogin_totp LIKE 'backup_email_enabled'");
             if (!$col) {
@@ -344,6 +387,19 @@ function securelogin_activate()
                 'name' => $templateName3,
                 'subject' => '【注册验证】验证您的邮箱以激活账户',
                 'message' => "尊敬的{\$client_name}，欢迎加入 {\$company_name}！\n\n为确保是您本人操作，请在页面输入以下验证码完成邮箱验证：\n验证码：{\$code}\n有效期：5 分钟。\n\n如非您本人操作，请忽略本邮件或联系支持。\n\n— {\$company_name} 安全团队",
+                'plaintext' => 1,
+                'custom' => 1,
+                'disabled' => 0,
+            ]);
+        }
+        $templateName4 = 'Secure Login TOTP Disabled Notice';
+        $existing4 = Capsule::table('tblemailtemplates')->where('name', $templateName4)->first();
+        if (!$existing4) {
+            Capsule::table('tblemailtemplates')->insert([
+                'type' => 'general',
+                'name' => $templateName4,
+                'subject' => '【安全通知】您的TOTP已被关闭',
+                'message' => "尊敬的客户，\n\n检测到您的账户已关闭 TOTP 动态口令验证。\n时间(本地)：{\$event_time_local}\n时间(UTC)：{\$event_time_utc}\nIP：{\$ip}\n\n若非本人操作，请立即联系支持并修改账户密码。\n\n--\n安全团队",
                 'plaintext' => 1,
                 'custom' => 1,
                 'disabled' => 0,
@@ -571,10 +627,12 @@ function securelogin_clientarea($vars)
         'resend_interval_seconds' => (int)securelogin_getAddonSetting('resend_interval_seconds', 60),
         'max_resend' => (int)securelogin_getAddonSetting('max_resend', 5),
         'max_attempts' => (int)securelogin_getAddonSetting('max_attempts', 5),
-        'lock_minutes' => (int)securelogin_getAddonSetting('lock_minutes', 30),
+        'lock_minutes' => (int)securelogin_getAddonSetting('lock_minutes', 1),
         'remember_device_days' => (int)securelogin_getAddonSetting('remember_device_days', 30),
         'enable_builtin_totp' => securelogin_boolval(securelogin_getAddonSetting('enable_builtin_totp', 'on'), true),
         'allow_email_backup_when_totp' => securelogin_boolval(securelogin_getAddonSetting('allow_email_backup_when_totp', 'on'), true),
+        'notify_on_totp_disabled' => securelogin_boolval(securelogin_getAddonSetting('notify_on_totp_disabled', 'on'), true),
+        'securitycenter_guard_refresh_seconds' => max(3, (int)securelogin_getAddonSetting('securitycenter_guard_refresh_seconds', 15)),
     ];
     $actionParam = (string)($_GET['action'] ?? '');
 
@@ -621,6 +679,15 @@ function securelogin_clientarea($vars)
         }
         $scMessage = '';
         $scError = '';
+        $disableAttemptsLeft = max(1, (int)$config['max_attempts']);
+        $disableLockSeconds = 0;
+        if ($totpEnabled) {
+            try {
+                $guard = securelogin_refreshTotpDisableGuardState($userId, $config);
+                $disableAttemptsLeft = max(0, (int)($guard->attempts_left ?? $disableAttemptsLeft));
+                $disableLockSeconds = securelogin_getTotpDisableLockRemainingSeconds($userId);
+            } catch (Exception $e) {}
+        }
         if ($postAction === 'sc_enable_totp') {
             if (!securelogin_validateCsrf('client', (string)($_POST['csrf_token'] ?? ''))) {
                 $scError = ($uiLang === 'zh') ? 'CSRF 校验失败，请刷新后重试。' : 'CSRF validation failed. Please refresh and try again.';
@@ -641,57 +708,69 @@ function securelogin_clientarea($vars)
                     $scError = ($uiLang === 'zh') ? '动态口令无效，请检查手机时间后重试。' : 'Invalid TOTP code. Please check device time and retry.';
                 }
             }
-        } elseif ($postAction === 'sc_send_disable_totp_code') {
+        } elseif ($postAction === 'sc_disable_totp') {
             if (!securelogin_validateCsrf('client', (string)($_POST['csrf_token'] ?? ''))) {
                 $scError = ($uiLang === 'zh') ? 'CSRF 校验失败，请刷新后重试。' : 'CSRF validation failed. Please refresh and try again.';
             } else {
                 if (!$totpEnabled) {
                     $scError = ($uiLang === 'zh') ? '当前未启用 TOTP。' : 'TOTP is not enabled.';
                 } else {
-                    if (securelogin_isLocked($userId)) {
-                        $lockedSec = securelogin_getLockRemainingSeconds($userId);
-                        $mins = floor($lockedSec / 60); $secs = $lockedSec % 60;
+                    try {
+                        $guard = securelogin_refreshTotpDisableGuardState($userId, $config);
+                        $disableAttemptsLeft = max(0, (int)($guard->attempts_left ?? $disableAttemptsLeft));
+                    } catch (Exception $e) {}
+                    $disableLockSeconds = securelogin_getTotpDisableLockRemainingSeconds($userId);
+                    if ($disableLockSeconds > 0) {
+                        $h = floor($disableLockSeconds / 3600);
+                        $m = floor(($disableLockSeconds % 3600) / 60);
+                        $s = (int)($disableLockSeconds % 60);
                         $scError = ($uiLang === 'zh')
-                            ? ('账户已锁定，请稍后重试（剩余 ' . (int)$mins . ' 分 ' . (int)$secs . ' 秒）。')
-                            : ('Account is locked. Please retry later (remaining ' . (int)$mins . 'm ' . (int)$secs . 's).');
+                            ? ('关闭 TOTP 密码确认已被锁定，请稍后重试（剩余 ' . (int)$h . ' 小时 ' . (int)$m . ' 分 ' . (int)$s . ' 秒）。')
+                            : ('TOTP disable password confirmation is temporarily locked. Retry later (remaining ' . (int)$h . 'h ' . (int)$m . 'm ' . (int)$s . 's).');
                     } else {
-                        $tpl = 'Secure Login Verification Code';
-                        list($okSend, $availableIn, $remaining) = securelogin_resendCode($userId, $config, $tpl);
-                        if ($okSend) {
-                            $_SESSION['securelogin_disable_totp_pending'] = 1;
-                            $scMessage = ($uiLang === 'zh') ? '验证码已发送到您的邮箱，请输入验证码确认关闭 TOTP。' : 'A code has been sent to your email. Enter it to confirm disabling TOTP.';
-                            securelogin_recordLog($userId, 'totp_disable_code_sent', 'Disable-TOTP confirmation code sent');
-                        } else {
-                            if ($availableIn > 0) {
-                                $scError = ($uiLang === 'zh')
-                                    ? ('发送过于频繁，请 ' . (int)$availableIn . ' 秒后重试。')
-                                    : ('Too many requests. Please retry in ' . (int)$availableIn . ' seconds.');
-                            } else {
-                                $scError = ($uiLang === 'zh')
-                                    ? '今日验证码发送次数已达上限。'
-                                    : 'Daily verification code limit reached.';
-                            }
+                    $confirmPassword = trim((string)($_POST['confirm_password'] ?? ''));
+                    if ($confirmPassword === '') {
+                        $scError = ($uiLang === 'zh') ? '请输入账户密码以确认关闭 TOTP。' : 'Please enter your account password to confirm disabling TOTP.';
+                    } else {
+                        $client = null;
+                        try {
+                            $client = Capsule::table('tblclients')->where('id', (int)$userId)->first();
+                        } catch (Exception $e) {
+                            $client = null;
                         }
-                    }
-                }
-            }
-        } elseif ($postAction === 'sc_disable_totp') {
-            if (!securelogin_validateCsrf('client', (string)($_POST['csrf_token'] ?? ''))) {
-                $scError = ($uiLang === 'zh') ? 'CSRF 校验失败，请刷新后重试。' : 'CSRF validation failed. Please refresh and try again.';
-            } else {
-                if ((int)($_SESSION['securelogin_disable_totp_pending'] ?? 0) !== 1) {
-                    $scError = ($uiLang === 'zh') ? '请先发送邮箱验证码。' : 'Please send an email code first.';
-                } else {
-                    $code = trim((string)($_POST['code'] ?? ''));
-                    $verify = securelogin_verifyCodeValue($userId, $code, $config);
-                    if (!empty($verify['ok'])) {
+                        $storedHash = $client ? (string)($client->password ?? '') : '';
+                        $passwordOk = false;
+                        if ($storedHash !== '') {
+                            $passwordOk = @password_verify($confirmPassword, $storedHash);
+                        }
+                        if ($passwordOk) {
                         securelogin_disableUserTotp($userId);
-                        unset($_SESSION['securelogin_disable_totp_pending']);
+                        securelogin_resetTotpDisableGuard($userId, $config);
                         $totpSecret = ''; $totpEnabled = false; $totpBackupEmailEnabled = true;
                         $scMessage = ($uiLang === 'zh') ? 'TOTP 已关闭。' : 'TOTP disabled.';
-                        securelogin_recordLog($userId, 'totp_disabled', 'User disabled built-in TOTP in security center via email code');
-                    } else {
-                        $scError = ($uiLang === 'zh') ? '邮箱验证码无效或已过期，请重试。' : 'Invalid or expired email verification code. Please retry.';
+                        securelogin_recordLog($userId, 'totp_disabled', 'User disabled built-in TOTP in security center via password confirmation');
+                        if (!empty($config['notify_on_totp_disabled'])) {
+                            securelogin_sendTotpDisabledNoticeEmail($userId, securelogin_getClientIp());
+                        }
+                        } else {
+                            $attemptResult = securelogin_consumeTotpDisablePasswordAttempt($userId, $config);
+                            $disableAttemptsLeft = (int)($attemptResult['attempts_left'] ?? 0);
+                            $disableLockSeconds = (int)($attemptResult['lock_seconds'] ?? 0);
+                            if (!empty($attemptResult['locked'])) {
+                                $h = floor($disableLockSeconds / 3600);
+                                $m = floor(($disableLockSeconds % 3600) / 60);
+                                $s = (int)($disableLockSeconds % 60);
+                                $scError = ($uiLang === 'zh')
+                                    ? ('账户密码错误次数过多，已禁止关闭 TOTP（剩余 ' . (int)$h . ' 小时 ' . (int)$m . ' 分 ' . (int)$s . ' 秒）。')
+                                    : ('Too many incorrect password attempts. Disabling TOTP is locked (remaining ' . (int)$h . 'h ' . (int)$m . 'm ' . (int)$s . 's).');
+                            } else {
+                                $scError = ($uiLang === 'zh')
+                                    ? ('账户密码错误，无法关闭 TOTP。剩余尝试次数：' . (int)$disableAttemptsLeft . '。')
+                                    : ('Incorrect account password. Unable to disable TOTP. Attempts left: ' . (int)$disableAttemptsLeft . '.');
+                            }
+                            securelogin_recordLog($userId, 'totp_disable_password_invalid', 'Failed to disable TOTP due to incorrect password');
+                        }
+                    }
                     }
                 }
             }
@@ -759,17 +838,10 @@ function securelogin_clientarea($vars)
 
         $provisioning = '';
         $pending = '';
-        $disableAvailableIn = 0;
-        $disableRemaining = 0;
         $rememberDeviceCount = 0;
         $recentFailedAt = '';
         $securityScore = 0;
         $securityLevel = 'low';
-        if ($totpEnabled) {
-            try {
-                list($disableAvailableIn, $disableRemaining) = securelogin_canResend($userId, $config);
-            } catch (Exception $e) { $disableAvailableIn = 0; $disableRemaining = 0; }
-        }
         try {
             $rememberDeviceCount = (int)Capsule::table('mod_securelogin_devices')->where('userid', $userId)->count();
         } catch (Exception $e) { $rememberDeviceCount = 0; }
@@ -848,14 +920,16 @@ function securelogin_clientarea($vars)
                 'totp_provisioning_uri' => (string)$provisioning,
                 'backup_email_enabled' => (bool)$totpBackupEmailEnabled,
                 'whmcs_language' => (string)($_SESSION['Language'] ?? ($vars['language'] ?? 'chinese')),
-                'disable_code_countdown' => (int)$disableAvailableIn,
-                'disable_code_remaining' => (int)$disableRemaining,
                 'security_score' => (int)$securityScore,
                 'security_level' => (string)$securityLevel,
                 'remember_device_count' => (int)$rememberDeviceCount,
                 'recent_failed_at' => (string)$recentFailedAt,
                 'device_list' => $deviceList,
                 'preferred_method' => (string)$preferredMethod,
+                'disable_attempts_left' => (int)$disableAttemptsLeft,
+                'disable_lock_seconds' => (int)$disableLockSeconds,
+                'disable_max_attempts' => max(1, (int)$config['max_attempts']),
+                'securitycenter_guard_refresh_seconds' => (int)$config['securitycenter_guard_refresh_seconds'],
             ],
         ];
     }
